@@ -20,17 +20,17 @@ appended. The non-English data already have end-of-sentence tokens for each line
 For non-English data you also need to specify the appropriate hyphenation dictionary which is supported by [Pyphen](http://pyphen.org) via the `--dict` option. The complete list of dictionaries is available at [LibreOffice's repository](https://cgit.freedesktop.org/libreoffice/dictionaries/tree/).
 
 ### Model
-To reproduce the Syl-Concat result on English PTB from Table 3 use
+To reproduce the Syl-Concat result on English PTB from Table 1
 ```
 python3 LSTM-Syl.py
 ```
 To reproduce the Syl-Sum result on English PTB from Table 3 use
 ```
-python3 LSTM-Syl.py --model sum
+python3 LSTM-Syl.py --model sum --size medium
 ```
 To reproduce the Syl-CNN result on Czech DATA-S from Table 3 use
 ```
-python3 LSTM-Syl.py --model cnn --data_dir data/cs --dict cs_CZ --eos " "
+python3 LSTM-Syl.py --model cnn --size medium --data_dir data/cs --dict cs_CZ --eos " "
 ```
 
 ### Sampled Softmax

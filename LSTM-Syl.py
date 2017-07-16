@@ -31,6 +31,7 @@ class SylConcatSmallConfig(object):
   syl_vocab_size = 0 # to be determined later
   syl_emb_dim = 50
   highway_size = 300
+  highway_num = 2
   max_word_len = 0   # to be determined later
     
   # Sampled softmax (SSM) hyperparameters
@@ -58,6 +59,7 @@ class SylConcatMediumConfig(object):
   syl_vocab_size = 0 # to be determined later
   syl_emb_dim = 228
   highway_size = 781
+  highway_num = 2
   max_word_len = 0   # to be determined later
     
   # Sampled softmax (SSM) hyperparameters
@@ -85,6 +87,7 @@ class SylSumSmallConfig(object):
   syl_vocab_size = 0 # to be determined later
   syl_emb_dim = 175
   highway_size = 175
+  highway_num = 2
   max_word_len = 0   # to be determined later
     
   # Sampled softmax (SSM) hyperparameters
@@ -112,6 +115,7 @@ class SylSumMediumConfig(object):
   syl_vocab_size = 0 # to be determined later
   syl_emb_dim = 438
   highway_size = 1256
+  highway_num = 2
   max_word_len = 0   # to be determined later
     
   # Sampled softmax (SSM) hyperparameters
@@ -137,11 +141,12 @@ class SylCNNSmallConfig(object):
 
   # Syllable embedding hyperparameters
   syl_vocab_size = 0 # to be determined later
-  syl_emb_dim = 175
+  syl_emb_dim = 50
   filter_widths = list(range(1, 4))
   feat_per_width = 60
   cnn_output_dim = (1 + 2 + 3) * 60
   highway_size = cnn_output_dim
+  highway_num = 2
   max_word_len = 0   # to be determined later
     
   # Sampled softmax (SSM) hyperparameters
@@ -172,6 +177,7 @@ class SylCNNMediumConfig(object):
   feat_per_width = 195
   cnn_output_dim = (1 + 2 + 3) * 60
   highway_size = cnn_output_dim
+  highway_num = 2
   max_word_len = 0   # to be determined later
     
   # Sampled softmax (SSM) hyperparameters
@@ -345,6 +351,7 @@ class Model:
     self.max_word_len = max_word_len = config.max_word_len
     self.syl_emb_dim = syl_emb_dim = config.syl_emb_dim
     self.highway_size = highway_size = config.highway_size
+    highway_num = config.highway_num
     self.init_scale = init_scale = config.init_scale
     num_sampled = config.num_sampled
     syl_vocab_size = config.syl_vocab_size
@@ -353,13 +360,14 @@ class Model:
     word_vocab_size = config.word_vocab_size
     keep_prob = config.keep_prob
     if model == 'cnn':
-      self.filter_widths = config.filter_widths1
+      self.filter_widths = config.filter_widths
       self.feat_per_width = config.feat_per_width
       self.cnn_output_dim = config.cnn_output_dim
 
     # syllable embedding matrix
     self.syl_embedding = tf.get_variable(
-        "syl_embedding", [syl_vocab_size, syl_emb_dim], dtype=tf.float32)
+        "syl_embedding", [syl_vocab_size, syl_emb_dim], 
+        dtype=tf.float32)
     
     # placeholders for training data and labels
     self.x = tf.placeholder(tf.int32, [batch_size, num_steps, max_word_len])
@@ -378,12 +386,11 @@ class Model:
       words_embedded_reshaped_proj = self.syl_cnn(x_embedded, need_reuse)
     
     # we feed the word vector into HW layer(s) ...
-    with tf.variable_scope('highway1'):
+    with tf.variable_scope('highway1', reuse=need_reuse):
       highw_output = self.highway_layer(words_embedded_reshaped_proj)
-    
-    with tf.variable_scope('highway2'):
-      highw_output = self.highway_layer(highw_output)
-      
+    if highway_num == 2:
+      with tf.variable_scope('highway2', reuse=need_reuse):
+        highw_output = self.highway_layer(highw_output)
     highw_output_reshaped = tf.reshape(
         highw_output, [batch_size, num_steps, -1])
     
@@ -391,30 +398,20 @@ class Model:
     lstm_input = tf.unstack(highw_output_reshaped, axis=1)
     # basic LSTM cell
     def lstm_cell():
-      return tf.contrib.rnn.core_rnn_cell.LSTMCell(
+      return tf.contrib.rnn.LSTMCell(
           hidden_size, forget_bias=1.0, reuse=need_reuse)
     cells = []
     for i in range(num_layers):
       with tf.variable_scope('layer' + str(i)):
         if not need_reuse:
-          if i == 0:
-            cells.append(tf.contrib.rnn.DropoutWrapper(
-                lstm_cell(), 
-                output_keep_prob=keep_prob,
-                input_size=highway_size,
-                dtype=tf.float32))
-          else:
-            cells.append(tf.contrib.rnn.DropoutWrapper(
-                lstm_cell(),
-                output_keep_prob=keep_prob,
-                input_size=hidden_size,
-                dtype=tf.float32))
+          cells.append(tf.contrib.rnn.DropoutWrapper(
+              lstm_cell(), 
+              output_keep_prob=keep_prob))
         else:
           cells.append(lstm_cell())
-    self.cell = tf.contrib.rnn.core_rnn_cell.MultiRNNCell(cells)
+    self.cell = tf.contrib.rnn.MultiRNNCell(cells)
     
     self.init_state = self.cell.zero_state(batch_size, dtype=tf.float32)
-    #with tf.variable_scope('lstm_rnn', reuse=need_reuse):
     outputs, self.state = tf.contrib.rnn.static_rnn(
         self.cell, 
         lstm_input, 
@@ -443,11 +440,11 @@ class Model:
   
   def syl_concat(self, x_embedded, need_reuse):
     '''Syl-Concat'''
-    x_in_syls = tf.unstack(x_embedded, axis=2)
+    x_embedded_reshaped = tf.reshape(
+        x_embedded, [-1, self.max_word_len, self.syl_emb_dim])
+    x_in_syls = tf.unstack(x_embedded_reshaped, axis=1)
     # concatenate syllable vectors to obtain word vectors
-    words_embedded = tf.concat(axis=1, values=x_in_syls)
-    words_embedded_reshaped = tf.reshape(words_embedded, 
-        [-1, self.max_word_len * self.syl_emb_dim])
+    words_embedded_reshaped = tf.concat(axis=1, values=x_in_syls)
     # we project word vectors to match the dimensionality of 
     # the highway layer
     proj_w = tf.get_variable(
@@ -458,16 +455,14 @@ class Model:
     return words_embedded_reshaped_proj
   
   def syl_sum(self, x_embedded, need_reuse):
-    words_embedded = tf.reduce_sum(x_embedded, axis=2)
-    words_embedded_reshaped = tf.reshape(words_embedded, 
-        [-1, self.syl_emb_dim])
+    x_embedded_reshaped = tf.reshape(
+        x_embedded, [-1, self.max_word_len, self.syl_emb_dim])
+    words_embedded_reshaped = tf.reduce_sum(x_embedded_reshaped, axis=1)
     # we project word vectors to match the dimensionality of 
     # the highway layer (if needed)
     if self.syl_emb_dim != self.highway_size:
       proj_w = tf.get_variable(
-          'proj_w', 
-          [self.syl_emb_dim, self.highway_size],
-          dtype=tf.float32)
+          'proj_w', [self.syl_emb_dim, self.highway_size], dtype=tf.float32)
       words_embedded_reshaped_proj = tf.matmul(words_embedded_reshaped, proj_w)
     else:
       words_embedded_reshaped_proj = words_embedded_reshaped
@@ -503,8 +498,7 @@ class Model:
               [w, self.syl_emb_dim, w * self.feat_per_width], 
               [w * self.feat_per_width]))
       return tf.concat(pools, 1)
-    
-    #with tf.variable_scope('cnn_output', reuse=need_reuse) as scope:
+
     cnn_output = tf.reshape(
         words_filter(words_embedded_reshaped), [-1, self.cnn_output_dim])
     return cnn_output
@@ -518,7 +512,6 @@ class Model:
     transf_biases = tf.get_variable(
         'transf_biases', 
         [self.highway_size],
-        initializer=tf.random_uniform_initializer(-2-0.01, -2+0.01),
         dtype=tf.float32)
     highw_weights = tf.get_variable(
         'highw_weights', 
@@ -610,7 +603,7 @@ def run_epoch(sess, model, raw_data, config, is_train=False, lr=None):
     else:
       c, state = sess.run([model.cost, model.state], 
           feed_dict={model.x: my_x, model.y: batch[1], 
-          model.init_state: state})      
+          model.init_state: state})
 
     costs += c
     step = iters // config.num_steps
@@ -647,7 +640,6 @@ if __name__ == '__main__':
     
   train_raw_data, valid_raw_data, test_raw_data, word_ix_to_syl_ixs \
       = read_data(args, config)
-
   with tf.variable_scope('Model', reuse=False, initializer=initializer):
     train = Train(config, model=args.model)
   print('Model size is: ', model_size())
