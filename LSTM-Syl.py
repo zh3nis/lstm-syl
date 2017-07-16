@@ -169,7 +169,7 @@ class SylCNNMediumConfig(object):
   syl_vocab_size = 0 # to be determined later
   syl_emb_dim = 242
   filter_widths = list(range(1, 4))
-  feat_per_width = 60
+  feat_per_width = 195
   cnn_output_dim = (1 + 2 + 3) * 60
   highway_size = cnn_output_dim
   max_word_len = 0   # to be determined later
@@ -193,9 +193,9 @@ def parse_args():
       default='small',
       help='model size. small or medium')
   parser.add_argument(
-      '--lang', 
+      '--dict', 
       default='en_US', 
-      help='a language which is supported by Pyphen')
+      help='a dictionary which is supported by Pyphen')
   parser.add_argument(
       '--is_train', 
       default='1', 
@@ -210,8 +210,8 @@ def parse_args():
       default='saves', 
       help='saves directory')
   parser.add_argument(
-      '--save_name', 
-      default='Syl-Concat',
+      '--prefix', 
+      default='MyModel',
       help='prefix for filenames when saving data and model')
   parser.add_argument(
       '--eos', 
@@ -232,7 +232,7 @@ def read_data(args, config):
   '''read data sets, construct all needed structures and update the config'''
   if args.ssm == '1': config.ssm = 1
   
-  hyphenator = Pyphen(lang=args.lang)
+  hyphenator = Pyphen(lang=args.dict)
 
   def my_syllables(word):
     return hyphenator.inserted(word).split('-')
@@ -241,7 +241,7 @@ def read_data(args, config):
     if not os.path.exists(args.save_dir):
       os.makedirs(args.save_dir)
     with open(
-        os.path.join(args.save_dir, args.save_name + '-data.pkl'), 
+        os.path.join(args.save_dir, args.prefix + '-data.pkl'), 
         'wb') as data_file:
       word_data = open(
           os.path.join(args.data_dir, 'train.txt'), 'r').read() \
@@ -261,7 +261,7 @@ def read_data(args, config):
       pickle.dump((word_data, words, word_lens_in_syl, syls_list), data_file)
   else:
     with open(
-        os.path.join(args.save_dir, args.save_name + '-data.pkl'), 
+        os.path.join(args.save_dir, args.prefix + '-data.pkl'), 
         'rb') as data_file:
       word_data, words, word_lens_in_syl, syls_list = pickle.load(data_file)
 
@@ -423,7 +423,6 @@ class Model:
     output = tf.reshape(tf.concat(axis=1, values=outputs), [-1, hidden_size])
       
     # finally we predict the next word according to a softmax normalization
-    #with tf.variable_scope('softmax_params', reuse=need_reuse):
     weights = tf.get_variable(
         'weights', [word_vocab_size, hidden_size], dtype=tf.float32)      
     biases = tf.get_variable('biases', [word_vocab_size], dtype=tf.float32)
@@ -451,7 +450,6 @@ class Model:
         [-1, self.max_word_len * self.syl_emb_dim])
     # we project word vectors to match the dimensionality of 
     # the highway layer
-    #with tf.variable_scope('projection', reuse=need_reuse):
     proj_w = tf.get_variable(
         'proj_w', 
         [self.max_word_len * self.syl_emb_dim, self.highway_size],
@@ -466,7 +464,6 @@ class Model:
     # we project word vectors to match the dimensionality of 
     # the highway layer (if needed)
     if self.syl_emb_dim != self.highway_size:
-      #with tf.variable_scope('projection', reuse=need_reuse):
       proj_w = tf.get_variable(
           'proj_w', 
           [self.syl_emb_dim, self.highway_size],
@@ -667,7 +664,7 @@ if __name__ == '__main__':
   saver = tf.train.Saver()
 
   if args.is_train == '1':
-    '''Training and evaluation'''
+    '''Training'''
     num_epochs = config.num_epochs
     init = tf.global_variables_initializer()
     learning_rate = config.learning_rate
@@ -676,6 +673,7 @@ if __name__ == '__main__':
       sess.run(init)
       sess.run(train.clear_syl_embedding_padding)
       prev_valid_ppl = float('inf')
+      best_valid_ppl = float('inf')
 
       for epoch in range(num_epochs):
         train_ppl = run_epoch(
@@ -694,25 +692,22 @@ if __name__ == '__main__':
         if prev_valid_ppl - valid_ppl < 0:
           learning_rate *= config.lr_decay
         prev_valid_ppl = valid_ppl
+        
+        # Save model if it gives better valid ppl
+        if valid_ppl < best_valid_ppl:
+          save_path = saver.save(sess, os.path.join(
+              args.save_dir, args.prefix + '-model.ckpt'))
+          print('Valid ppl improved. Model saved in file: %s' % save_path)
+          best_valid_ppl = valid_ppl
 
-      # Get test set perplexity after training is done
-      test_ppl = run_epoch(
-          sess, test, test_raw_data, test_config, is_train=False)
-      print('Test set perplexity = %.3f' % test_ppl)
+  '''Evaluation of a trained model on test set'''
+  with tf.Session() as sess:
+    # Restore variables from disk.
+    saver.restore(
+        sess, os.path.join(args.save_dir, args.prefix + '-model.ckpt'))
+    print('Model restored.')
 
-      save_path = saver.save(sess, os.path.join(
-          args.save_dir, args.save_name + '-model.ckpt'))
-      print('Model saved in file: %s' % save_path)
-
-  else:
-    '''Just evaluation of a trained model on test set'''
-    with tf.Session() as sess:
-      # Restore variables from disk.
-      saver.restore(
-          sess, os.path.join(args.save_dir, args.save_name + '-model.ckpt'))
-      print('Model restored.')
-
-      # Get test set perplexity
-      test_ppl = run_epoch(
-          sess, test, test_raw_data, test_config, is_train=False)
-      print('Test set perplexity = %.3f' % test_ppl)
+    # Get test set perplexity
+    test_ppl = run_epoch(
+        sess, test, test_raw_data, test_config, is_train=False)
+    print('Test set perplexity = %.3f' % test_ppl)
