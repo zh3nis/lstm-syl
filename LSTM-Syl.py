@@ -175,7 +175,7 @@ class SylCNNMediumConfig(object):
   syl_emb_dim = 242
   filter_widths = list(range(1, 4))
   feat_per_width = 195
-  cnn_output_dim = (1 + 2 + 3) * 60
+  cnn_output_dim = (1 + 2 + 3) * 195
   highway_size = cnn_output_dim
   highway_num = 2
   max_word_len = 0   # to be determined later
