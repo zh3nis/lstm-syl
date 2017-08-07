@@ -512,6 +512,7 @@ class Model:
     transf_biases = tf.get_variable(
         'transf_biases', 
         [self.highway_size],
+        initializer=tf.random_uniform_initializer(-2-0.01, -2+0.01),
         dtype=tf.float32)
     highw_weights = tf.get_variable(
         'highw_weights', 
